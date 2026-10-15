@@ -1,6 +1,6 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "swim-coach", "runtimeExecutable": "./run.sh", "runtimeArgs": [], "port": 8091, "env": { "PORT": "8091", "HTTPS_PORT": "8444" } }
+    { "name": "swim-coach", "runtimeExecutable": "./run.sh", "runtimeArgs": [], "port": 8091, "env": { "PORT": "8091" } }
   ]
 }

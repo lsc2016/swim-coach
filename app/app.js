@@ -1,57 +1,113 @@
 'use strict';
-// 수영 코치 — 모든 데이터는 data/ 아래 .md 파일. 이 파일은 그걸 읽어서 화면을 그린다.
+// 수영 코치 — 완전 정적 앱.
+// - 커리큘럼·수영장: 저장소 data/ 의 md를 묶은 data.json 을 읽는다 (push하면 반영)
+// - 내 기록·내 정보·앱에서 고친 수영장 표: 이 브라우저 안(localStorage)에 md 그대로 저장 → "md로 내보내기"
 
 const $app = document.getElementById('app');
 const DIFFS = ['물 마심', '숨 참기', '몸이 가라앉음', '다리가 안 뜸', '기타'];
 const WEEK = '일월화수목금토';
-const S = { files: {}, online: true, fb: null, calMonth: null };
+const S = { files: {}, repo: {}, built: '', online: true, fb: null, calMonth: null };
 
-// ───────────── 저장소: 서버의 md 파일 + 오프라인 사본 ─────────────
+// ───────────── 저장소: 저장소 md(data.json) + 브라우저 안의 내 파일 ─────────────
 
 function lsGet(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } }
-function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* 저장 못 해도 화면은 동작 */ } }
+function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } }
+const localFiles = () => lsGet('localFiles', {});
 
 async function loadFiles() {
   try {
-    const r = await fetch('/api/files', { cache: 'no-store' });
+    const r = await fetch('data.json', { cache: 'no-cache' });
     if (!r.ok) throw new Error(r.status);
-    S.files = (await r.json()).files;
-    S.online = true;
+    const j = await r.json();
+    S.repo = j.files; S.built = j.built || '';
+    lsSet('repo', { files: S.repo, built: S.built });
   } catch {
-    S.files = lsGet('files', {});
-    S.online = false;
+    const c = lsGet('repo', { files: {}, built: '' });
+    S.repo = c.files; S.built = c.built;
   }
-  const pending = lsGet('pending', {});
-  Object.assign(S.files, pending);
-  lsSet('files', S.files);
-  if (S.online && Object.keys(pending).length) await flush();
-}
-
-async function put(path, text) {
-  const r = await fetch('/api/file?path=' + encodeURIComponent(path), {
-    method: 'PUT', body: text, headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
-  });
-  if (!r.ok) throw new Error(r.status);
-}
-
-async function flush() {
-  const pending = lsGet('pending', {});
-  for (const [p, t] of Object.entries(pending)) {
-    try { await put(p, t); delete pending[p]; lsSet('pending', pending); S.online = true; }
-    catch { S.online = false; return; }
-  }
+  S.online = navigator.onLine;
+  S.files = { ...S.repo, ...localFiles() };
 }
 
 async function saveFile(path, text) {
+  const mine = localFiles();
+  mine[path] = text;
+  if (!lsSet('localFiles', mine)) alert('휴대폰 저장 공간이 부족해서 저장하지 못했어요. 기록 화면에서 md로 내보내 주세요.');
   S.files[path] = text;
-  lsSet('files', S.files);
-  try { await put(path, text); S.online = true; }
-  catch {
-    const pending = lsGet('pending', {});
-    pending[path] = text;
-    lsSet('pending', pending);
-    S.online = false;
+  // 브라우저가 저장 공간을 마음대로 비우지 않도록 요청 (지원하는 곳에서만)
+  try { navigator.storage?.persist?.(); } catch { /* 무시 */ }
+}
+
+function dropLocal(path) {
+  const mine = localFiles();
+  delete mine[path];
+  lsSet('localFiles', mine);
+  S.files = { ...S.repo, ...mine };
+}
+
+// ───────────── md로 내보내기 (zip 안에 날짜별 md) ─────────────
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+  return t;
+})();
+function crc32(bytes) { let c = 0xFFFFFFFF; for (const b of bytes) c = CRC_TABLE[(c ^ b) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+
+function makeZip(entries) {
+  const enc = new TextEncoder(), parts = [], central = [];
+  const d = new Date();
+  const time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  const date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  let offset = 0;
+  for (const [name, text] of entries) {
+    const nb = enc.encode(name), data = enc.encode(text), crc = crc32(data);
+    const h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true);
+    h.setUint16(10, time, true); h.setUint16(12, date, true); h.setUint32(14, crc, true);
+    h.setUint32(18, data.length, true); h.setUint32(22, data.length, true); h.setUint16(26, nb.length, true);
+    parts.push(h, nb, data);
+    const c = new DataView(new ArrayBuffer(46));
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true);
+    c.setUint16(12, time, true); c.setUint16(14, date, true); c.setUint32(16, crc, true);
+    c.setUint32(20, data.length, true); c.setUint32(24, data.length, true); c.setUint16(28, nb.length, true);
+    c.setUint32(42, offset, true);
+    central.push(c, nb);
+    offset += 30 + nb.length + data.length;
   }
+  const size = central.reduce((s, x) => s + x.byteLength, 0);
+  const e = new DataView(new ArrayBuffer(22));
+  e.setUint32(0, 0x06054b50, true); e.setUint16(8, entries.length, true); e.setUint16(10, entries.length, true);
+  e.setUint32(12, size, true); e.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, e], { type: 'application/zip' });
+}
+
+// 휴대폰이면 공유 시트("파일에 저장"), 아니면 다운로드. 사용자가 취소하면 false.
+async function giveFile(blob, name) {
+  const file = new File([blob], name, { type: blob.type });
+  if (navigator.canShare?.({ files: [file] }) && /iPhone|iPad|Android/i.test(navigator.userAgent)) {
+    try { await navigator.share({ files: [file] }); return true; }
+    catch (err) { if (err.name === 'AbortError') return false; }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement('a'), { href: url, download: name });
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 5000);
+  return true;
+}
+
+const myLogs = () => Object.entries(localFiles()).filter(([p]) => /^log\/.+\.md$/.test(p)).sort();
+function unexportedCount() {
+  const ex = lsGet('exported', {});
+  return myLogs().filter(([p, t]) => ex[p] !== t).length;
+}
+
+async function exportLogs() {
+  const logs = myLogs();
+  if (!logs.length) { alert('이 휴대폰에 저장된 기록이 아직 없어요.'); return false; }
+  const ok = await giveFile(makeZip(logs.map(([p, t]) => [p.replace(/^log\//, ''), t])), `swim-log-${localDate()}.zip`);
+  if (ok) { lsSet('exported', Object.fromEntries(logs)); lsSet('lastExport', localDate()); }
+  return ok;
 }
 
 // ───────────── md 읽기 ─────────────
@@ -145,8 +201,7 @@ async function saveProfile(p) {
 - 사는 동네: ${p.area}
 - 다니는 수영장: ${p.myPool || '(없음)'}
 
-> 앱이 쓰는 파일이에요. 직접 고쳐도 됩니다.
-> '수업 지정'에 수업 번호(예: "05")를 넣으면 다음 수업이 그걸로 바뀌고, 기록을 남기면 다시 비워집니다.
+> 이 브라우저 안에만 저장되는 내 정보예요. (설정 화면에서 바꿀 수 있어요)
 `;
   await saveFile('profile.md', text);
 }
@@ -328,9 +383,11 @@ function render(html, nav = '') {
 const topBar = (title = '') => `<div class="topbar"><button class="linkbtn" data-go="">← 홈</button><span class="muted small">${esc(title)}</span></div>`;
 const go = hash => { location.hash = hash ? '#/' + hash : '#/'; };
 function statusLine() {
-  const n = Object.keys(lsGet('pending', {})).length;
-  if (n) return `<p class="status">오프라인 · 기록 ${n}개 저장 대기 (집 와이파이에서 열면 자동 저장)</p>`;
   return S.online ? '' : '<p class="status">오프라인 · 마지막으로 받은 내용을 보여 주는 중</p>';
+}
+function exportLine() {
+  const last = lsGet('lastExport', ''), n = unexportedCount();
+  return `<p class="exportline">마지막 내보내기: ${last || '아직 없음'}${n ? ` · <b>안 내보낸 기록 ${n}개</b>` : ''}</p>`;
 }
 
 let wakeLock = null;
@@ -591,7 +648,7 @@ ${F.memo || '-'}
       <p class="muted small">다음 수업</p>
       <p style="font-size:1.3em;font-weight:800">${esc(nextTitle)}</p>
       <button class="primary" data-go="">홈으로</button>
-    </div>${statusLine()}`);
+    </div>${exportLine()}`);
 }
 
 // ───────────── 수영장 찾기 ─────────────
@@ -629,8 +686,15 @@ function viewPools() {
       </article>`).join('')}
     </div>
     <div style="margin-top:16px"><button data-go="pool/new">+ 수영장 추가</button></div>
-    <p class="muted small" style="margin-top:12px">원본은 data/pools.md 입니다. 파일을 직접 고쳐도 여기에 반영돼요.</p>
+    ${localFiles()['pools.md'] ? `<div class="card small" style="margin-top:16px">
+      <p><b>앱에서 고친 표를 쓰는 중</b> — 이 휴대폰에만 있어요. 저장소에 남기려면 내보낸 pools.md로 data/pools.md를 바꿔서 push하세요.</p>
+      <div class="stack"><button id="exportPools">pools.md 내보내기</button><button id="resetPools">저장소 버전으로 되돌리기</button></div>
+    </div>` : '<p class="muted small" style="margin-top:12px">원본은 저장소의 data/pools.md 입니다. 고쳐서 push하면 여기에 반영돼요.</p>'}
     ${statusLine()}`);
+  const ep = document.getElementById('exportPools');
+  if (ep) ep.onclick = () => giveFile(new Blob([S.files['pools.md']], { type: 'text/markdown' }), 'pools.md');
+  const rp = document.getElementById('resetPools');
+  if (rp) rp.onclick = () => { if (confirm('앱에서 고친 내용을 버리고 저장소의 pools.md로 돌아갈까요?')) { dropLocal('pools.md'); viewPools(); } };
   $app.querySelectorAll('[data-mine]').forEach(b => b.onclick = async () => {
     const name = pools[b.dataset.mine].name;
     await saveProfile({ ...profile(), myPool: profile().myPool === name ? '' : name });
@@ -696,6 +760,7 @@ function viewLog() {
   }
   const monthCount = Ls.filter(l => l.date.startsWith(`${y}-${String(m + 1).padStart(2, '0')}`)).length;
   render(`${topBar('기록')}
+    ${exportLine()}
     <h1>기록</h1>
     <div class="card">
       <div class="field-label" style="margin-top:0">진행</div>
@@ -704,10 +769,12 @@ function viewLog() {
       <p class="small muted">지금: ${esc(cur)}</p>
     </div>
     <div class="card" style="margin-top:14px">
-      <div class="calhead"><button id="pm">◀</button><b>${y}년 ${m + 1}월 · ${monthCount}번 감</b><button id="nm">▶</button></div>
+      <div class="calhead"><button id="pm">◀</button><b>${y}.${m + 1} · ${monthCount}번</b><button id="nm">▶</button></div>
       <div class="cal" style="margin-top:10px">${[...WEEK].map(w => `<div class="dow">${w}</div>`).join('')}${cellsHtml.join('')}</div>
     </div>
-    <p class="muted small" style="margin-top:12px">하루 기록은 data/log/날짜.md 파일에 있어요.</p>`);
+    <div style="margin-top:16px"><button id="export">md로 내보내기</button></div>
+    <p class="muted small" style="margin-top:8px">기록은 이 휴대폰 브라우저 안에 저장돼요. 브라우저 데이터가 지워지면 사라지니 가끔 내보내서 저장소의 data/log/ 에 넣어 두세요. (zip 안에 날짜별 md)</p>`);
+  document.getElementById('export').onclick = async () => { if (await exportLogs() && location.hash === '#/log') viewLog(); };
   document.getElementById('pm').onclick = () => { S.calMonth = new Date(y, m - 1, 1); viewLog(); };
   document.getElementById('nm').onclick = () => { S.calMonth = new Date(y, m + 1, 1); viewLog(); };
 }
@@ -716,7 +783,6 @@ function viewLog() {
 
 function viewSettings() {
   const prof = profile(), { pools } = parsePools();
-  const pending = Object.keys(lsGet('pending', {})).length;
   const swOk = 'serviceWorker' in navigator && window.isSecureContext;
   render(`${topBar('설정')}
     <h1>설정</h1>
@@ -727,12 +793,14 @@ function viewSettings() {
     <div class="stack" style="margin-top:16px">
       <button class="primary" id="save">저장</button>
       <button data-go="pick">수업 직접 고르기</button>
-      <button id="reload">md 파일 다시 불러오기</button>
+      <button id="reload">저장소에서 새로 받기</button>
+      <button data-go="log">기록 md로 내보내기</button>
     </div>
     <div class="card small" style="margin-top:20px">
-      <p>연결: ${S.online ? '맥북 서버와 연결됨' : '오프라인'}${pending ? ` · 저장 대기 ${pending}개` : ''}</p>
-      <p>오프라인 사용: ${swOk ? '가능 (한 번 연 화면은 인터넷 없이 열림)' : '<b>불가</b> — 휴대폰은 https 주소로 열어야 해요 (README 참고)'}</p>
-      <p class="muted">데이터 위치: 맥북의 swim-coach/data 폴더 (.md 파일)</p>
+      <p>커리큘럼·수영장: 저장소 data/ 의 md${S.built ? ` (${esc(S.built.slice(0, 10))} 배포본)` : ''}</p>
+      <p>내 기록·동네: 이 브라우저 안에 저장 · 안 내보낸 기록 ${unexportedCount()}개</p>
+      <p>오프라인 사용: ${swOk ? '가능 (한 번 연 화면은 인터넷 없이 열림)' : '불가 (https 주소에서만 됨)'}</p>
+      <p class="muted">아이폰은 Safari와 '홈 화면 앱'의 저장 공간이 따로예요. 한쪽으로만 쓰세요.</p>
     </div>`);
   document.getElementById('save').onclick = async () => {
     await saveProfile({ ...profile(), area: document.getElementById('area').value.trim(), myPool: document.getElementById('mine').value });
@@ -763,9 +831,10 @@ document.addEventListener('click', e => {
   if (el) { e.preventDefault(); go(el.dataset.go); }
 });
 window.addEventListener('hashchange', route);
-window.addEventListener('online', async () => { await flush(); });
+window.addEventListener('online', () => { S.online = true; });
+window.addEventListener('offline', () => { S.online = false; });
 document.addEventListener('visibilitychange', async () => {
-  // md 파일을 밖에서 고쳤을 수 있으니 다시 볼 때 새로 읽는다. (입력 중인 화면은 건드리지 않음)
+  // 저장소 md가 새로 배포됐을 수 있으니 다시 볼 때 새로 읽는다. (입력 중인 화면은 건드리지 않음)
   if (document.visibilityState !== 'visible') return;
   const h = location.hash.replace(/^#\/?/, '');
   await loadFiles();
