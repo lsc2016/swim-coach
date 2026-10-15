@@ -32,9 +32,9 @@ fi
 
 echo ""
 echo "  🏊 수영 코치"
-echo "  맥북:   http://localhost:8080"
-echo "  휴대폰: https://$HOST:8443   (같은 와이파이)"
-echo "  인증서 처음 설치: 휴대폰에서 http://$IP:8080/ca.crt  → README 참고"
+echo "  맥북:   http://localhost:${PORT:-8080}"
+echo "  휴대폰: https://$HOST:${HTTPS_PORT:-8443}   (같은 와이파이)"
+echo "  인증서 처음 설치: 휴대폰에서 http://$IP:${PORT:-8080}/ca.crt  → README 참고"
 echo "  끄기:   Ctrl+C"
 echo ""
 

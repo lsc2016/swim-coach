@@ -212,7 +212,7 @@ label.f { display: block; font-size: 0.8em; font-weight: 700; color: var(--muted
 .cal .d { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; border-radius: 12px; font-size: 0.85em; }
 .cal .d.went { background: var(--primary); color: var(--primary-text); font-weight: 800; }
 .cal .d.today { outline: 2px solid var(--primary); }
-.calhead { display: flex; align-items: center; justify-content: space-between; }
+.calhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 0.85em; text-align: center; }
 .calhead button { width: 64px; }
 
 .status { font-size: 0.75em; color: var(--muted); text-align: center; margin-top: 8px; }

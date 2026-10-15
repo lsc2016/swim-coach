@@ -325,7 +325,7 @@ function render(html, nav = '') {
   if (nav) document.body.insertAdjacentHTML('beforeend', `<nav class="navbar"><div class="inner">${nav}</div></nav>`);
   window.scrollTo(0, 0);
 }
-const top = (title = '') => `<div class="topbar"><button class="linkbtn" data-go="">← 홈</button><span class="muted small">${esc(title)}</span></div>`;
+const topBar = (title = '') => `<div class="topbar"><button class="linkbtn" data-go="">← 홈</button><span class="muted small">${esc(title)}</span></div>`;
 const go = hash => { location.hash = hash ? '#/' + hash : '#/'; };
 function statusLine() {
   const n = Object.keys(lsGet('pending', {})).length;
@@ -436,7 +436,7 @@ function buildCards(L, V, P) {
 function viewLesson() {
   const P = plan();
   if (P.finished) {
-    return render(`${top()}<div class="card"><h1>모든 수업을 마쳤어요</h1><p>자유형·배영·평영 25m까지 왔습니다. 이제는 거리를 조금씩 늘려 보세요.</p><button data-go="pick">수업 다시 고르기</button></div>`);
+    return render(`${topBar()}<div class="card"><h1>모든 수업을 마쳤어요</h1><p>자유형·배영·평영 25m까지 왔습니다. 이제는 거리를 조금씩 늘려 보세요.</p><button data-go="pick">수업 다시 고르기</button></div>`);
   }
   const L = P.lesson, V = variantMenu(L, P.prev, P.round);
   const cards = buildCards(L, V, P);
@@ -444,7 +444,7 @@ function viewLesson() {
   let i = Math.min(lsGet(key, 0), cards.length - 1);
   const show = () => {
     lsSet(key, i);
-    render(`${top(L.id.startsWith('보충') ? '보충' : '수업 ' + L.id)}<section class="card lesson-card">${cards[i]}</section>`,
+    render(`${topBar(L.id.startsWith('보충') ? '보충' : '수업 ' + L.id)}<section class="card lesson-card">${cards[i]}</section>`,
       `<button id="prev" ${i === 0 ? 'disabled style="opacity:.35"' : ''}>◀ 이전</button>
        <span class="count">${i + 1}/${cards.length}</span>
        <button id="next" class="primary" ${i === cards.length - 1 ? 'disabled style="opacity:.35"' : ''}>다음 ▶</button>`);
@@ -466,7 +466,7 @@ function viewLesson() {
 function viewPick() {
   const C = curriculum();
   const btn = l => `<button class="choice" data-pick="${esc(l.id)}">${esc(l.supp ? '보충' : l.id)} · ${esc(l.title.replace(/^보충 — /, ''))}</button>`;
-  render(`${top('수업 고르기')}
+  render(`${topBar('수업 고르기')}
     <h1>수업 고르기</h1>
     <p class="muted small">고른 수업은 다음 기록을 남길 때까지 '오늘의 수업'이 됩니다.</p>
     <h2>1단계 — 자유형 25m까지</h2><div class="stack">${C.main.filter(l => l.stage !== '2').map(btn).join('')}</div>
@@ -501,13 +501,13 @@ function viewDone() {
   };
 
   if (F.step === 1) {
-    render(`${top('다녀왔어요 1/4')}<h1>오늘 된 것을 눌러 주세요</h1><p class="muted small">안 된 건 그냥 두면 돼요.</p>
+    render(`${topBar('다녀왔어요 1/4')}<h1>오늘 된 것을 눌러 주세요</h1><p class="muted small">안 된 건 그냥 두면 돼요.</p>
       <div class="stack">${names.map((n, i) => `<button class="choice ${F.done.has(n) ? 'on' : ''}" data-i="${i}"><span class="box">${F.done.has(n) ? '✓' : ''}</span>${esc(n)}</button>`).join('')}</div>`, nav());
     $app.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { const n = names[b.dataset.i]; F.done.has(n) ? F.done.delete(n) : F.done.add(n); viewDone(); });
     return bindNav(() => { F.step = 2; viewDone(); });
   }
   if (F.step === 2) {
-    render(`${top('다녀왔어요 2/4')}<h1>힘들었던 점은?</h1><p class="muted small">여러 개 골라도 돼요. 없으면 그냥 다음.</p>
+    render(`${topBar('다녀왔어요 2/4')}<h1>힘들었던 점은?</h1><p class="muted small">여러 개 골라도 돼요. 없으면 그냥 다음.</p>
       <div class="stack">${DIFFS.map(d => `<button class="choice ${F.diffs.has(d) ? 'on' : ''}" data-d="${d}"><span class="box">${F.diffs.has(d) ? '✓' : ''}</span>${d}</button>`).join('')}
       ${F.diffs.has('기타') ? `<input id="etc" type="text" placeholder="어떤 점이 힘들었나요?" value="${esc(F.etc)}">` : ''}</div>`, nav());
     $app.querySelectorAll('[data-d]').forEach(b => b.onclick = () => { const d = b.dataset.d; F.etc = document.getElementById('etc')?.value ?? F.etc; F.diffs.has(d) ? F.diffs.delete(d) : F.diffs.add(d); viewDone(); });
@@ -518,7 +518,7 @@ function viewDone() {
     const rec = allDone ? '넘어가기' : '반복';
     const opt = (v, title, sub) => `<button class="choice ${v === rec ? 'rec' : ''} ${F.choice === v ? 'on' : ''}" data-c="${v}" style="flex-direction:column;align-items:flex-start;min-height:88px">
       <span>${title} ${v === rec ? '<span class="tag good">추천</span>' : ''}</span><span class="muted small" style="font-weight:500">${sub}</span></button>`;
-    render(`${top('다녀왔어요 3/4')}<h1>다음엔?</h1>
+    render(`${topBar('다녀왔어요 3/4')}<h1>다음엔?</h1>
       <div class="card" style="margin-bottom:14px"><div class="field-label" style="margin-top:0">넘어가는 조건</div><ul>${sec(L, '넘어가는 조건').map(x => `<li>${inline(x)}</li>`).join('')}</ul></div>
       <p class="small">${allDone ? '오늘 메뉴를 다 해냈어요. 조건도 채웠다면 넘어가요.' : `안 된 것이 ${names.length - F.done.size}개 있어서 한 번 더를 추천해요.`}</p>
       <div class="stack">${opt('반복', '같은 수업 한 번 더', '순서와 횟수를 조금 바꿔서')}${opt('넘어가기', '다음 수업으로', L.supp ? '원래 수업으로 돌아가기' : '조건을 채웠을 때')}</div>`,
@@ -528,7 +528,7 @@ function viewDone() {
     return;
   }
   if (F.step === 4) {
-    render(`${top('다녀왔어요 4/4')}<h1>한 줄 메모</h1><p class="muted small">안 써도 돼요.</p>
+    render(`${topBar('다녀왔어요 4/4')}<h1>한 줄 메모</h1><p class="muted small">안 써도 돼요.</p>
       <textarea id="memo" placeholder="예: 코에 물이 덜 들어갔다">${esc(F.memo)}</textarea>`, nav(null, null, '저장'));
     return bindNav(async () => { F.memo = document.getElementById('memo').value.trim(); await saveLog(P); });
   }
@@ -584,7 +584,7 @@ ${F.memo || '-'}
   S.fb = null;
   const N = plan();
   const nextTitle = N.finished ? '모든 수업 완료' : `${N.lesson.supp ? '보충 · ' : N.lesson.id + '. '}${N.lesson.title}`;
-  render(`${top()}
+  render(`${topBar()}
     <div class="card stack" style="margin-top:6vh;text-align:center">
       <p style="font-size:1.2em;font-weight:700">${esc(pickOne(CHEER[choice] || CHEER['반복']))}</p>
       ${N.why ? `<p class="note">${esc(N.why)}</p>` : ''}
@@ -603,7 +603,7 @@ function viewPools() {
     .sort((a, b) => a.t.rank - b.t.rank || distNum(a.p.dist) - distNum(b.p.dist));
   const badge = t => ({ open: 'good', later: '', unknown: 'warn' }[t.status] ?? 'warn');
   const tel = s => (String(s).match(/[\d-]{7,}/) || [''])[0];
-  render(`${top('수영장 찾기')}
+  render(`${topBar('수영장 찾기')}
     <h1>어디로 갈까</h1>
     <p class="muted small">${WEEK[now.getDay()]}요일 ${hm(now.getHours() * 60 + now.getMinutes())} 기준 · 지금 열린 곳이 위로 · ${esc(profile().area)}</p>
     <div class="stack">
@@ -634,7 +634,7 @@ function viewPools() {
   $app.querySelectorAll('[data-mine]').forEach(b => b.onclick = async () => {
     const name = pools[b.dataset.mine].name;
     await saveProfile({ ...profile(), myPool: profile().myPool === name ? '' : name });
-    viewPools();
+    if (location.hash === '#/pools') viewPools();
   });
 }
 
@@ -649,7 +649,7 @@ function viewPoolEdit(idx) {
     hours: '예: 평일 06:00-07:50, 12:00-12:50 / 토 09:00-11:50 / 일 휴관  (모르면 "확인 필요")',
     fee1: '예: 3,000원', feeM: '예: 50,000원',
   };
-  render(`${top(isNew ? '수영장 추가' : '수영장 고치기')}
+  render(`${topBar(isNew ? '수영장 추가' : '수영장 고치기')}
     <h1>${isNew ? '수영장 추가' : esc(p.name)}</h1>
     ${fields.map(([k, label]) => `<label class="f" for="f-${k}">${label}</label>
       ${k === 'hours' || k === 'memo' ? `<textarea id="f-${k}">${esc(p[k])}</textarea>` : `<input type="text" id="f-${k}" value="${esc(p[k])}">`}
@@ -695,7 +695,7 @@ function viewLog() {
     cellsHtml.push(`<div class="d ${went.has(ds) ? 'went' : ''} ${ds === localDate(today) ? 'today' : ''}">${d}</div>`);
   }
   const monthCount = Ls.filter(l => l.date.startsWith(`${y}-${String(m + 1).padStart(2, '0')}`)).length;
-  render(`${top('기록')}
+  render(`${topBar('기록')}
     <h1>기록</h1>
     <div class="card">
       <div class="field-label" style="margin-top:0">진행</div>
@@ -718,7 +718,7 @@ function viewSettings() {
   const prof = profile(), { pools } = parsePools();
   const pending = Object.keys(lsGet('pending', {})).length;
   const swOk = 'serviceWorker' in navigator && window.isSecureContext;
-  render(`${top('설정')}
+  render(`${topBar('설정')}
     <h1>설정</h1>
     <label class="f" for="area">사는 동네</label>
     <input id="area" type="text" value="${esc(prof.area)}">
@@ -738,7 +738,7 @@ function viewSettings() {
     await saveProfile({ ...profile(), area: document.getElementById('area').value.trim(), myPool: document.getElementById('mine').value });
     go('');
   };
-  document.getElementById('reload').onclick = async () => { await loadFiles(); viewSettings(); };
+  document.getElementById('reload').onclick = async () => { await loadFiles(); if (location.hash === '#/settings') viewSettings(); };
 }
 
 // ───────────── 라우터 ─────────────

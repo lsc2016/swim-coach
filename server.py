@@ -17,7 +17,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 APP = os.path.join(ROOT, "app")
 DATA = os.path.join(ROOT, "data")
 CERTS = os.path.join(ROOT, "certs")
-HTTP_PORT = int(os.environ.get("HTTP_PORT", 8080))
+HTTP_PORT = int(os.environ.get("HTTP_PORT") or os.environ.get("PORT") or 8080)
 HTTPS_PORT = int(os.environ.get("HTTPS_PORT", 8443))
 
 
@@ -111,9 +111,15 @@ Handler.extensions_map.update({
 
 def main():
     servers = [ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), Handler)]
+    https = None
     crt, key = os.path.join(CERTS, "server.crt"), os.path.join(CERTS, "server.key")
     if os.path.exists(crt) and os.path.exists(key):
-        https = ThreadingHTTPServer(("0.0.0.0", HTTPS_PORT), Handler)
+        try:
+            https = ThreadingHTTPServer(("0.0.0.0", HTTPS_PORT), Handler)
+        except OSError:
+            print(f"  (HTTPS 포트 {HTTPS_PORT}이 사용 중이라 휴대폰용 주소는 꺼 둡니다)")
+            https = None
+    if https:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(crt, key)
         https.socket = ctx.wrap_socket(https.socket, server_side=True)
