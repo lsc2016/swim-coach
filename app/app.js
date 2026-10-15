@@ -141,7 +141,7 @@ function parseLesson(path, text) {
   const { meta, body } = parseFM(text);
   const L = {
     path, id: String(meta.id ?? path), stage: String(meta['단계'] ?? ''), order: +meta['순서'] || 0,
-    title: meta['제목'] || path, supp: meta['보충'] || '', safety: '', sec: {}, menu: [],
+    title: meta['제목'] || path, supp: meta['보충'] || '', stageName: meta['단계이름'] || '', safety: '', sec: {}, menu: [],
   };
   let cur = null, item = null;
   for (const raw of body.split(/\r?\n/)) {
@@ -152,6 +152,7 @@ function parseLesson(path, text) {
     if (cur.includes('연습 메뉴')) {
       if (line.startsWith('### ')) { item = { name: line.slice(4).replace(/^\d+\.\s*/, '').trim(), fields: [] }; L.menu.push(item); continue; }
       if (!item || !line.trim()) continue;
+      if (line.startsWith('>')) { if (line.includes('멈추')) item.stop = true; continue; }
       const f = line.match(/^\s*-\s*([^:]{1,10}):\s*(.*)$/);
       if (f) item.fields.push([f[1].trim(), f[2]]);
       else if (item.fields.length) item.fields[item.fields.length - 1][1] += ' ' + line.trim();
@@ -166,6 +167,7 @@ const sec = (L, key) => { const k = Object.keys(L.sec).find(k => k.includes(key)
 function curriculum() {
   const all = Object.entries(S.files).filter(([p]) => p.startsWith('curriculum/')).map(([p, t]) => parseLesson(p, t));
   const main = all.filter(l => !l.supp).sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+  main.forEach((l, i) => { l.no = i + 1; });
   const supp = all.filter(l => l.supp);
   return { all, main, supp };
 }
@@ -179,7 +181,7 @@ function logs() {
         path: p, date: String(meta['날짜'] || p.slice(4, 14)), lessonId: String(meta['수업'] ?? ''),
         title: meta['제목'] || '', round: +meta['회차'] || 1, pool: meta['수영장'] || '',
         done: arr(meta['된 것']), notDone: arr(meta['안 된 것']), diffs: arr(meta['힘들었던 점']),
-        next: meta['다음'] || '', memo: meta['메모'] || '',
+        next: meta['다음'] || '', memo: meta['메모'] || '', fear: meta['무서웠던 정도'] || '',
       };
     })
     .sort((a, b) => a.date.localeCompare(b.date) || a.path.localeCompare(b.path));
@@ -207,20 +209,32 @@ async function saveProfile(p) {
 }
 
 // ───────────── 선생님: 다음 수업 정하기 ─────────────
+// 무서움이 기본값: "많이"·"못 들어감"이면 절대 앞으로 가지 않고 한 칸 뒤로.
+
+const FEARS = ['전혀', '조금', '많이', '못 들어감'];
+const scared = f => f === '많이' || f === '못 들어감';
 
 function trailing(list, id) { let n = 0; for (let i = list.length - 1; i >= 0 && list[i].lessonId === id; i--) n++; return n; }
 
 function mainNext(C, Ls) {
   const isSupp = id => C.supp.some(s => s.id === id);
-  const mainLogs = Ls.filter(l => !isSupp(l.lessonId));
-  const lm = mainLogs[mainLogs.length - 1];
-  const idx = lm ? C.main.findIndex(l => l.id === lm.lessonId) : -1;
-  if (idx < 0) return { lesson: C.main[0], idx: 0, round: 1, prev: null };
-  if (lm.next === '넘어가기') {
-    if (idx + 1 >= C.main.length) return { finished: true, idx: C.main.length };
-    return { lesson: C.main[idx + 1], idx: idx + 1, round: 1, prev: null };
+  let pos = 0, round = 1, prev = null, backFrom = -1;
+  for (const l of Ls) {
+    if (isSupp(l.lessonId)) {
+      if (l.next === '뒤로') { backFrom = pos; pos = Math.max(pos - 1, 0); round = 1; prev = null; }
+      continue;
+    }
+    const idx = C.main.findIndex(m => m.id === l.lessonId);
+    if (idx < 0) continue;
+    if (l.next === '넘어가기') { pos = idx + 1; round = 1; prev = null; backFrom = -1; }
+    else if (l.next === '뒤로') { backFrom = idx; pos = Math.max(idx - 1, 0); round = 1; prev = null; }
+    else { round = prev && prev.lessonId === l.lessonId && pos === idx ? round + 1 : 2; pos = idx; prev = l; backFrom = -1; }
   }
-  return { lesson: C.main[idx], idx, round: trailing(mainLogs, lm.lessonId) + 1, prev: lm };
+  if (pos >= C.main.length) return { finished: true, idx: C.main.length };
+  const why = backFrom < 0 ? '' : backFrom === pos
+    ? '지난번에 많이 무서웠으니 같은 수업을, 멈추기 지점까지만 해 봐요.'
+    : '지난번에 많이 무서웠으니 한 칸 뒤 수업이에요. 편했던 곳에서 다시 시작해요.';
+  return { lesson: C.main[pos], idx: pos, round, prev, why };
 }
 
 function plan() {
@@ -233,6 +247,7 @@ function plan() {
     const l = C.all.find(x => x.id === prof.pick);
     if (l) { const prev = [...Ls].reverse().find(x => x.lessonId === l.id) || null; return { ...M, lesson: l, finished: false, round: prev ? trailing(Ls, l.id) + 1 : 1, prev, why: '직접 고른 수업' }; }
   }
+  if (last && last.next === '뒤로') return M;
   if (last && isSupp(last.lessonId) && last.next === '반복') {
     const l = C.supp.find(s => s.id === last.lessonId);
     return { ...M, lesson: l, finished: false, round: trailing(Ls, l.id) + 1, prev: last, why: `보충 수업 (${l.supp})` };
@@ -250,35 +265,45 @@ function plan() {
   return M;
 }
 
-// 같은 수업을 다시 할 때: 지난번에 안 된 것부터, 횟수를 조금 늘린다. 다 됐는데 반복이면 순서만 바꾼다.
-function bump(s) {
-  return s.replace(/(\d+)(\s*)(번|회)(?!.*\d+\s*(?:번|회))/, (m, n, sp, u) => `${+n + (+n >= 5 ? 2 : 1)}${sp}${u}`);
-}
-function variantMenu(L, prev, round) {
-  let items = L.menu.map(m => ({ name: m.name, fields: m.fields.map(f => [...f]), note: '' }));
-  if (round <= 1 || !prev || !items.length) return { items, note: '' };
-  const failed = new Set(prev.notDone);
-  if (failed.size) {
-    const f = items.filter(m => failed.has(m.name)), ok = items.filter(m => !failed.has(m.name));
-    if (f.length) {
-      f.forEach(m => { m.note = '지난번에 안 된 것 · 횟수 늘림'; m.fields.forEach(fl => { if (fl[0].includes('몇')) fl[1] = bump(fl[1]); }); });
-      return { items: [...f, ...ok], note: `${round}번째. 지난번에 안 된 것부터, 횟수를 조금 늘렸어요.` };
+// 같은 수업을 다시 할 때: 순서는 그대로 두고, 지난번에 마지막으로 해 본 것 하나만 아주 조금(1분·5초·1번) 늘린다.
+function bumpTiny(s) {
+  for (const [re, step, label] of [[/(\d+)(?=\s*분)/g, 1, '1분'], [/(\d+)(?=\s*초)/g, 5, '5초'], [/(\d+)(?=\s*(?:번|회))/g, 1, '1번']]) {
+    const all = [...s.matchAll(re)];
+    if (all.length) {
+      const m = all[all.length - 1];
+      return { text: s.slice(0, m.index) + (+m[1] + step) + s.slice(m.index + m[1].length), more: label };
     }
   }
-  const k = (round - 1) % items.length;
-  return { items: [...items.slice(k), ...items.slice(0, k)], note: `${round}번째. 순서를 바꿔 봤어요.` };
+  return null;
+}
+function variantMenu(L, prev, round) {
+  const items = L.menu.map(m => ({ name: m.name, fields: m.fields.map(f => [...f]), stop: m.stop, note: '' }));
+  if (round <= 1 || !prev || !items.length) return { items, note: '' };
+  const done = new Set(prev.done);
+  let last = -1;
+  items.forEach((m, i) => { if (done.has(m.name)) last = i; });
+  if (last < 0) return { items, note: `${round}번째. 지난번과 똑같이 해요. 첫 번째 것만 해도 충분해요.` };
+  const m = items[last];
+  const f = m.fields.find(x => x[0].includes('몇'));
+  const b = f && bumpTiny(f[1]);
+  if (b) f[1] = b.text;
+  m.note = `지난번에 여기까지 했어요${b ? ` · 오늘은 ${b.more}만 더` : ''}`;
+  return { items, note: `${round}번째. 지난번에 '${m.name}'까지 했어요. 오늘은 거기서 ${b ? b.more + '만' : '아주 조금만'} 더.` };
 }
 
 // ───────────── 수영장 ─────────────
 
 const POOL_COLS = [
-  ['name', '이름'], ['dist', '거리'], ['hours', '자유수영 시간'], ['fee1', '1회 요금'], ['feeM', '월 자유수영 요금'],
+  ['name', '이름'], ['dist', '거리'], ['hours', '자유수영 시간'], ['shallow', '얕은 레인 수심'], ['quiet', '한가한 시간대'],
+  ['fee1', '1회 요금'], ['feeM', '월 자유수영 요금'],
   ['lanes', '레인·수심'], ['phone', '전화'], ['reserve', '예약 방법'], ['memo', '메모'], ['map', '지도'],
 ];
 function colKey(h) {
   h = h.replace(/\s/g, '');
   if (h.includes('이름')) return 'name';
   if (h.includes('거리')) return 'dist';
+  if (h.includes('얕은')) return 'shallow';
+  if (h.includes('한가')) return 'quiet';
   if (h.includes('자유수영시간') || h === '시간') return 'hours';
   if (h.includes('1회')) return 'fee1';
   if (h.includes('월')) return 'feeM';
@@ -371,6 +396,9 @@ function todayInfo(p, now = new Date()) {
   return { status: 'done', rank: 3, text: '오늘은 끝남', list, unsure };
 }
 const distNum = s => { const m = String(s || '').match(/\d+/); return m ? +m[0] : 9999; };
+// "1.0m", "100cm" → 미터. 모르면 아주 큰 값 (정렬에서 뒤로)
+const depthNum = s => { const m = String(s || '').match(/(\d+(?:\.\d+)?)\s*(cm|m)/); return m ? (m[2] === 'cm' ? +m[1] / 100 : +m[1]) : 99; };
+const known = s => s && !/^확인\s*필요/.test(s.trim());
 
 // ───────────── 화면 공통 ─────────────
 
@@ -420,7 +448,7 @@ function viewOnboard() {
 function viewHome() {
   if (!profile().area) return viewOnboard();
   const P = plan();
-  const sub = P.finished ? '모든 수업 완료' : `다음: ${P.lesson.id.startsWith('보충') ? '' : P.lesson.id + '. '}${P.lesson.title}`;
+  const sub = P.finished ? '모든 수업 완료' : `다음: ${P.lesson.title}`;
   render(`
     <div class="home-title"><h1>수영 코치</h1></div>
     <div class="home-buttons">
@@ -443,15 +471,16 @@ function myPoolStrip() {
   if (!p) return '';
   const t = todayInfo(p);
   const days = `${WEEK[new Date().getDay()]}요일`;
-  return `<div class="poolstrip">📍 <b>${esc(p.name)}</b> · ${days} ${esc(t.list || t.text)}${t.list ? ` <span class="muted">(${esc(t.text)})</span>` : ''}${t.unsure ? ' · 시간 확인 필요' : ''}</div>`;
+  const extra = [known(p.shallow) && `얕은 곳 ${p.shallow}`, known(p.quiet) && `한가한 때 ${p.quiet}`].filter(Boolean).join(' · ');
+  return `<div class="poolstrip">📍 <b>${esc(p.name)}</b> · ${days} ${esc(t.list || t.text)}${t.list ? ` <span class="muted">(${esc(t.text)})</span>` : ''}${t.unsure ? ' · 시간 확인 필요' : ''}${extra ? `<br>${esc(extra)}` : ''}</div>`;
 }
 
 function buildCards(L, V, P) {
   const cards = [];
-  const stageTag = L.supp ? '<span class="tag warn">보충 수업</span>' : `<span class="tag">${L.stage === '2' ? '2단계' : '1단계'} · ${esc(L.id)}</span>`;
+  const stageTag = L.supp ? '<span class="tag warn">보충 수업</span>' : `<span class="tag">${esc(L.stageName || '수업')} · ${L.no}번째</span>`;
   const never = sec(L, '절대');
   cards.push(`
-    ${myPoolStrip()}
+    ${L.stage === '0' ? '' : myPoolStrip()}
     <div class="safety">${inline(L.safety.replace(/^⚠️\s*/, '⚠️ ').trim() || '⚠️ 얕은 쪽에서만 · 안전요원 있는 시간에만 · 몸이 이상하면 바로 나오기')}</div>
     <div>${stageTag} ${P.round > 1 ? `<span class="tag warn">${P.round}번째</span>` : ''}</div>
     <h1>${esc(L.title)}</h1>
@@ -471,7 +500,8 @@ function buildCards(L, V, P) {
       ${m.note ? `<span class="tag warn">${esc(m.note)}</span>` : ''}
       <div class="item-name">${esc(m.name)}</div>
       ${reps ? `<div class="reps">${inline(reps[1])}</div>` : ''}
-      ${rest.map(([k, v]) => `<div class="field-label">${esc(k)}</div><p class="how">${inline(v)}</p>`).join('')}`);
+      ${rest.map(([k, v]) => `<div class="field-label">${esc(k)}</div><p class="how">${inline(v)}</p>`).join('')}
+      ${m.stop ? '<div class="stopbox">🛑 <b>무서우면 여기서 멈추기</b><br>여기까지 했으면 오늘 수업은 성공이에요. 나머지는 다음에 해도 됩니다.<div style="margin-top:10px"><button data-go="done">여기까지 하고 다녀왔어요</button></div></div>' : ''}`);
   });
   const ok = sec(L, '잘 되고'), ng = sec(L, '잘못되고');
   if (ok.length || ng.length) cards.push(`
@@ -501,7 +531,7 @@ function viewLesson() {
   let i = Math.min(lsGet(key, 0), cards.length - 1);
   const show = () => {
     lsSet(key, i);
-    render(`${topBar(L.id.startsWith('보충') ? '보충' : '수업 ' + L.id)}<section class="card lesson-card">${cards[i]}</section>`,
+    render(`${topBar(L.supp ? '보충 수업' : `수업 ${L.no} / ${curriculum().main.length}`)}<section class="card lesson-card">${cards[i]}</section>`,
       `<button id="prev" ${i === 0 ? 'disabled style="opacity:.35"' : ''}>◀ 이전</button>
        <span class="count">${i + 1}/${cards.length}</span>
        <button id="next" class="primary" ${i === cards.length - 1 ? 'disabled style="opacity:.35"' : ''}>다음 ▶</button>`);
@@ -520,14 +550,21 @@ function viewLesson() {
   show();
 }
 
+const lessonLabel = l => l.supp ? `보충 · ${l.title.replace(/^보충 — /, '')}` : `${l.no}. ${l.title}`;
+
 function viewPick() {
   const C = curriculum();
-  const btn = l => `<button class="choice" data-pick="${esc(l.id)}">${esc(l.supp ? '보충' : l.id)} · ${esc(l.title.replace(/^보충 — /, ''))}</button>`;
+  const btn = l => `<button class="choice" data-pick="${esc(l.id)}">${esc(lessonLabel(l))}</button>`;
+  const groups = [];
+  C.main.forEach(l => {
+    const name = l.stageName || '그 밖의 수업';
+    if (!groups.length || groups[groups.length - 1].name !== name) groups.push({ name, list: [] });
+    groups[groups.length - 1].list.push(l);
+  });
   render(`${topBar('수업 고르기')}
     <h1>수업 고르기</h1>
     <p class="muted small">고른 수업은 다음 기록을 남길 때까지 '오늘의 수업'이 됩니다.</p>
-    <h2>1단계 — 자유형 25m까지</h2><div class="stack">${C.main.filter(l => l.stage !== '2').map(btn).join('')}</div>
-    <h2>2단계 — 배영·평영</h2><div class="stack">${C.main.filter(l => l.stage === '2').map(btn).join('')}</div>
+    ${groups.map(g => `<h2>${esc(g.name)}</h2><div class="stack">${g.list.map(btn).join('')}</div>`).join('')}
     <h2>보충 수업</h2><div class="stack">${C.supp.map(btn).join('')}</div>
     ${profile().pick ? '<p style="margin-top:16px"><button data-pick="">직접 고른 것 취소 (앱이 정하게)</button></p>' : ''}`);
   $app.querySelectorAll('[data-pick]').forEach(b => b.onclick = async () => {
@@ -537,63 +574,99 @@ function viewPick() {
 }
 
 // ───────────── 다녀왔어요 ─────────────
+// 질문: 무서웠던 정도 → 해 본 것 → 힘들었던 점 → 다음엔? → 한 줄 메모
 
 const CHEER = {
-  '넘어가기': ['다음 수업으로 갑니다.', '조건 통과. 다음 걸로 넘어가요.', '한 칸 앞으로.'],
-  '반복': ['같은 걸 한 번 더 하면 됩니다.', '반복이 실력이 됩니다.', '오늘 물에 들어간 것도 연습입니다.'],
+  '못 들어감': ['수영장까지 간 것만으로 오늘은 된 거예요.', '물 앞에 있었으면 그걸로 충분해요.'],
+  '많이': ['무서운데도 해 봤으면 된 거예요.', '오늘 발 담갔으면 된 거예요.'],
+  '넘어가기': ['오늘 한 칸 왔어요. 다음에도 천천히.', '다음 칸으로 갑니다. 서두를 것 없어요.'],
+  '반복': ['오늘 물에 들어갔으면 된 거예요.', '같은 자리에서 조금 더 편해지면 돼요.'],
 };
 const pickOne = a => a[Math.floor(Math.random() * a.length)];
+
+function backTarget(P) {
+  const C = curriculum();
+  const idx = P.lesson.supp ? P.idx : C.main.findIndex(m => m.id === P.lesson.id);
+  return C.main[Math.max((idx < 0 ? 0 : idx) - 1, 0)];
+}
 
 function viewDone() {
   const P = plan();
   if (P.finished) return go('lesson');
   const L = P.lesson;
-  if (!S.fb || S.fb.lessonId !== L.id) S.fb = { lessonId: L.id, step: 1, done: new Set(), diffs: new Set(), etc: '', choice: '', memo: '' };
+  if (!S.fb || S.fb.lessonId !== L.id) S.fb = { lessonId: L.id, step: 1, fear: '', done: new Set(), diffs: new Set(), etc: '', choice: '', memo: '' };
   const F = S.fb;
   const names = L.menu.map(m => m.name);
-  const nav = (back, next, nextLabel = '다음 ▶') => `<button id="back">◀ 이전</button><button id="fwd" class="primary">${nextLabel}</button>`;
-  const bindNav = (onNext) => {
-    document.getElementById('back').onclick = () => { if (F.step > 1) { F.step--; viewDone(); } else go('lesson'); };
-    document.getElementById('fwd').onclick = onNext;
-  };
+  const nav = (nextLabel = '다음 ▶') => `<button id="back">◀ 이전</button><button id="fwd" class="primary">${nextLabel}</button>`;
+  const prevStep = () => (F.step === 3 && F.fear === '못 들어감' ? 1 : F.step - 1);
+  const bindBack = () => { document.getElementById('back').onclick = () => { if (F.step > 1) { F.step = prevStep(); viewDone(); } else go('lesson'); }; };
+  const title = n => topBar(`다녀왔어요 ${n}/5`);
 
   if (F.step === 1) {
-    render(`${topBar('다녀왔어요 1/4')}<h1>오늘 된 것을 눌러 주세요</h1><p class="muted small">안 된 건 그냥 두면 돼요.</p>
-      <div class="stack">${names.map((n, i) => `<button class="choice ${F.done.has(n) ? 'on' : ''}" data-i="${i}"><span class="box">${F.done.has(n) ? '✓' : ''}</span>${esc(n)}</button>`).join('')}</div>`, nav());
-    $app.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { const n = names[b.dataset.i]; F.done.has(n) ? F.done.delete(n) : F.done.add(n); viewDone(); });
-    return bindNav(() => { F.step = 2; viewDone(); });
+    render(`${title(1)}<h1>오늘 무서웠던 정도는?</h1><p class="muted small">솔직하게 골라 주세요. 다음 수업을 여기에 맞춰요.</p>
+      <div class="stack">${FEARS.map(f => `<button class="choice ${F.fear === f ? 'on' : ''}" data-f="${f}"><span class="box">${F.fear === f ? '✓' : ''}</span>${f}</button>`).join('')}</div>`,
+      '<button id="back">◀ 이전</button>');
+    $app.querySelectorAll('[data-f]').forEach(b => b.onclick = () => {
+      F.fear = b.dataset.f;
+      if (F.fear === '못 들어감') { F.done.clear(); F.step = 3; } else F.step = 2;
+      viewDone();
+    });
+    return bindBack();
   }
   if (F.step === 2) {
-    render(`${topBar('다녀왔어요 2/4')}<h1>힘들었던 점은?</h1><p class="muted small">여러 개 골라도 돼요. 없으면 그냥 다음.</p>
+    render(`${title(2)}<h1>오늘 해 본 것을 눌러 주세요</h1><p class="muted small">못 한 건 그냥 두면 돼요. 하나만 해 봤어도 괜찮아요.</p>
+      <div class="stack">${names.map((n, i) => `<button class="choice ${F.done.has(n) ? 'on' : ''}" data-i="${i}"><span class="box">${F.done.has(n) ? '✓' : ''}</span>${esc(n)}</button>`).join('')}</div>`, nav());
+    $app.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { const n = names[b.dataset.i]; F.done.has(n) ? F.done.delete(n) : F.done.add(n); viewDone(); });
+    bindBack();
+    document.getElementById('fwd').onclick = () => { F.step = 3; viewDone(); };
+    return;
+  }
+  if (F.step === 3) {
+    render(`${title(3)}<h1>힘들었던 점은?</h1><p class="muted small">여러 개 골라도 돼요. 없으면 그냥 다음.</p>
       <div class="stack">${DIFFS.map(d => `<button class="choice ${F.diffs.has(d) ? 'on' : ''}" data-d="${d}"><span class="box">${F.diffs.has(d) ? '✓' : ''}</span>${d}</button>`).join('')}
       ${F.diffs.has('기타') ? `<input id="etc" type="text" placeholder="어떤 점이 힘들었나요?" value="${esc(F.etc)}">` : ''}</div>`, nav());
     $app.querySelectorAll('[data-d]').forEach(b => b.onclick = () => { const d = b.dataset.d; F.etc = document.getElementById('etc')?.value ?? F.etc; F.diffs.has(d) ? F.diffs.delete(d) : F.diffs.add(d); viewDone(); });
-    return bindNav(() => { F.etc = document.getElementById('etc')?.value ?? F.etc; F.step = 3; viewDone(); });
-  }
-  if (F.step === 3) {
-    const allDone = names.length > 0 && names.every(n => F.done.has(n));
-    const rec = allDone ? '넘어가기' : '반복';
-    const opt = (v, title, sub) => `<button class="choice ${v === rec ? 'rec' : ''} ${F.choice === v ? 'on' : ''}" data-c="${v}" style="flex-direction:column;align-items:flex-start;min-height:88px">
-      <span>${title} ${v === rec ? '<span class="tag good">추천</span>' : ''}</span><span class="muted small" style="font-weight:500">${sub}</span></button>`;
-    render(`${topBar('다녀왔어요 3/4')}<h1>다음엔?</h1>
-      <div class="card" style="margin-bottom:14px"><div class="field-label" style="margin-top:0">넘어가는 조건</div><ul>${sec(L, '넘어가는 조건').map(x => `<li>${inline(x)}</li>`).join('')}</ul></div>
-      <p class="small">${allDone ? '오늘 메뉴를 다 해냈어요. 조건도 채웠다면 넘어가요.' : `안 된 것이 ${names.length - F.done.size}개 있어서 한 번 더를 추천해요.`}</p>
-      <div class="stack">${opt('반복', '같은 수업 한 번 더', '순서와 횟수를 조금 바꿔서')}${opt('넘어가기', '다음 수업으로', L.supp ? '원래 수업으로 돌아가기' : '조건을 채웠을 때')}</div>`,
-      `<button id="back">◀ 이전</button>`);
-    $app.querySelectorAll('[data-c]').forEach(b => b.onclick = () => { F.choice = b.dataset.c; F.step = 4; viewDone(); });
-    document.getElementById('back').onclick = () => { F.step = 2; viewDone(); };
+    bindBack();
+    document.getElementById('fwd').onclick = () => { F.etc = document.getElementById('etc')?.value ?? F.etc; F.step = 4; viewDone(); };
     return;
   }
   if (F.step === 4) {
-    render(`${topBar('다녀왔어요 4/4')}<h1>한 줄 메모</h1><p class="muted small">안 써도 돼요.</p>
-      <textarea id="memo" placeholder="예: 코에 물이 덜 들어갔다">${esc(F.memo)}</textarea>`, nav(null, null, '저장'));
-    return bindNav(async () => { F.memo = document.getElementById('memo').value.trim(); await saveLog(P); });
+    if (scared(F.fear)) {
+      // 많이 무서웠으면 고르지 않는다: 무조건 한 칸 뒤로.
+      const B = backTarget(P);
+      render(`${title(4)}<h1>다음엔 한 칸 뒤로</h1>
+        <div class="card"><p>오늘 ${F.fear === '못 들어감' ? '들어가지 못했으니' : '많이 무서웠으니'}, 다음엔 편했던 수업으로 돌아가요.</p>
+        <p style="font-size:1.2em;font-weight:800;margin-top:10px">${esc(B.id === L.id ? lessonLabel(L) + ' (같은 수업, 멈추기 지점까지만)' : lessonLabel(B))}</p></div>
+        <p class="small muted" style="margin-top:12px">편한 곳에서 다시 익숙해지는 게 가장 빨리 가는 길이에요.</p>`, nav('알겠어요 ▶'));
+      bindBack();
+      document.getElementById('fwd').onclick = () => { F.choice = '뒤로'; F.step = 5; viewDone(); };
+      return;
+    }
+    const allDone = names.length > 0 && names.every(n => F.done.has(n));
+    const rec = allDone ? '넘어가기' : '반복';
+    const opt = (v, t, sub) => `<button class="choice ${v === rec ? 'rec' : ''} ${F.choice === v ? 'on' : ''}" data-c="${v}" style="flex-direction:column;align-items:flex-start;min-height:88px">
+      <span>${t} ${v === rec ? '<span class="tag good">추천</span>' : ''}</span><span class="muted small" style="font-weight:500">${sub}</span></button>`;
+    render(`${title(4)}<h1>다음엔?</h1>
+      <div class="card" style="margin-bottom:14px"><div class="field-label" style="margin-top:0">넘어가는 조건</div><ul>${sec(L, '넘어가는 조건').map(x => `<li>${inline(x)}</li>`).join('')}</ul></div>
+      <p class="small">${allDone ? '오늘 메뉴를 다 해 봤어요. 조건도 편하게 됐다면 넘어가요.' : '아직 안 해 본 게 있어서 같은 수업을 추천해요.'}</p>
+      <div class="stack">${opt('반복', '같은 수업, 조금만 더', '지난번보다 1분·1번만 더')}${opt('넘어가기', '다음 칸으로', L.supp ? '원래 수업으로 돌아가기' : '조건이 편하게 됐을 때')}</div>`,
+      '<button id="back">◀ 이전</button>');
+    $app.querySelectorAll('[data-c]').forEach(b => b.onclick = () => { F.choice = b.dataset.c; F.step = 5; viewDone(); });
+    return bindBack();
+  }
+  if (F.step === 5) {
+    render(`${title(5)}<h1>한 줄 메모</h1><p class="muted small">안 써도 돼요.</p>
+      <textarea id="memo" placeholder="예: 발 담그고 10분 앉아 있었다">${esc(F.memo)}</textarea>`, nav('저장'));
+    bindBack();
+    document.getElementById('fwd').onclick = async () => { F.memo = document.getElementById('memo').value.trim(); await saveLog(P); };
   }
 }
 
 function localDate(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+
+const NEXT_TEXT = { '넘어가기': '다음 칸으로', '반복': '같은 수업, 조금만 더', '뒤로': '한 칸 뒤로 (무서웠으니 편한 곳부터)' };
 
 async function saveLog(P) {
   const F = S.fb, L = P.lesson, date = localDate();
@@ -602,7 +675,7 @@ async function saveLog(P) {
   const names = L.menu.map(m => m.name);
   const done = names.filter(n => F.done.has(n)), notDone = names.filter(n => !F.done.has(n));
   const diffs = DIFFS.filter(d => F.diffs.has(d));
-  const pool = profile().myPool;
+  const pool = L.stage === '0' ? '집' : profile().myPool;
   const list = a => a.length ? a.map(x => `- ${x}`).join('\n') : '- (없음)';
   const text = `---
 날짜: ${date}
@@ -610,6 +683,7 @@ async function saveLog(P) {
 제목: ${q(L.title)}
 회차: ${P.round}
 수영장: ${q(pool)}
+무서웠던 정도: ${F.fear}
 된 것: ${JSON.stringify(done)}
 안 된 것: ${JSON.stringify(notDone)}
 힘들었던 점: ${JSON.stringify(diffs)}
@@ -619,14 +693,15 @@ async function saveLog(P) {
 ---
 # ${date} 수영 기록
 
-- **수업**: ${L.supp ? '' : L.id + '. '}${L.title}${P.round > 1 ? ` (${P.round}번째)` : ''}
+- **수업**: ${lessonLabel(L)}${P.round > 1 ? ` (${P.round}번째)` : ''}
 - **수영장**: ${pool || '-'}
-- **다음**: ${F.choice === '넘어가기' ? '다음 수업으로' : '같은 수업 한 번 더'}
+- **무서웠던 정도**: ${F.fear}
+- **다음**: ${NEXT_TEXT[F.choice] || F.choice}
 
-## 된 것
+## 해 본 것
 ${list(done)}
 
-## 안 된 것
+## 아직 안 해 본 것
 ${list(notDone)}
 
 ## 힘들었던 점
@@ -637,13 +712,13 @@ ${F.memo || '-'}
 `;
   await saveFile(path, text);
   if (profile().pick) await saveProfile({ ...profile(), pick: '' });
-  const choice = F.choice;
+  const key = scared(F.fear) ? F.fear : F.choice;
   S.fb = null;
   const N = plan();
-  const nextTitle = N.finished ? '모든 수업 완료' : `${N.lesson.supp ? '보충 · ' : N.lesson.id + '. '}${N.lesson.title}`;
+  const nextTitle = N.finished ? '모든 수업 완료' : lessonLabel(N.lesson);
   render(`${topBar()}
     <div class="card stack" style="margin-top:6vh;text-align:center">
-      <p style="font-size:1.2em;font-weight:700">${esc(pickOne(CHEER[choice] || CHEER['반복']))}</p>
+      <p style="font-size:1.2em;font-weight:700">${esc(pickOne(CHEER[key] || CHEER['반복']))}</p>
       ${N.why ? `<p class="note">${esc(N.why)}</p>` : ''}
       <p class="muted small">다음 수업</p>
       <p style="font-size:1.3em;font-weight:800">${esc(nextTitle)}</p>
@@ -657,18 +732,23 @@ function viewPools() {
   const { pools } = parsePools();
   const now = new Date(), mine = profile().myPool;
   const list = pools.map((p, i) => ({ p, i, t: todayInfo(p, now) }))
-    .sort((a, b) => a.t.rank - b.t.rank || distNum(a.p.dist) - distNum(b.p.dist));
+    .sort((a, b) => a.t.rank - b.t.rank || depthNum(a.p.shallow) - depthNum(b.p.shallow) || distNum(a.p.dist) - distNum(b.p.dist));
   const badge = t => ({ open: 'good', later: '', unknown: 'warn' }[t.status] ?? 'warn');
   const tel = s => (String(s).match(/[\d-]{7,}/) || [''])[0];
   render(`${topBar('수영장 찾기')}
     <h1>어디로 갈까</h1>
-    <p class="muted small">${WEEK[now.getDay()]}요일 ${hm(now.getHours() * 60 + now.getMinutes())} 기준 · 지금 열린 곳이 위로 · ${esc(profile().area)}</p>
+    <p class="muted small">${WEEK[now.getDay()]}요일 ${hm(now.getHours() * 60 + now.getMinutes())} 기준 · 지금 열린 곳이 위로, 그다음 얕은 곳 순 · ${esc(profile().area)}</p>
+    <p class="small">처음엔 <b>사람 적고 얕은 곳</b>이 제일 중요해요. 가 보고 한가했던 시간을 '고치기'로 적어 두세요.</p>
     <div class="stack">
     ${list.map(({ p, i, t }) => `
       <article class="card pool ${p.name === mine ? 'mine' : ''}">
         <div class="name">${p.name === mine ? '★ ' : ''}${esc(p.name)}</div>
         <div><span class="tag ${badge(t)}">${esc(t.text)}</span> ${p.dist ? `<span class="muted small">${esc(p.dist)}</span>` : ''}</div>
         ${t.list ? `<div class="today small">오늘: ${esc(t.list)}${t.unsure ? ' (확인 필요)' : ''}</div>` : ''}
+        <dl class="key">
+          <dt>얕은 곳</dt><dd>${known(p.shallow) ? esc(p.shallow) : '<span class="muted">확인 필요</span>'}</dd>
+          <dt>한가한 때</dt><dd>${known(p.quiet) ? esc(p.quiet) : '<span class="muted">확인 필요</span>'}</dd>
+        </dl>
         <div class="fees">1회 <b>${esc(p.fee1 || '확인 필요')}</b> · 월 <b>${esc(p.feeM || '확인 필요')}</b></div>
         <details><summary>자세히</summary><dl>
           <dt>자유수영</dt><dd>${esc(p.hours || '확인 필요')}</dd>
@@ -712,6 +792,8 @@ function viewPoolEdit(idx) {
     dist: '예: 도보 15분 · 버스 20분',
     hours: '예: 평일 06:00-07:50, 12:00-12:50 / 토 09:00-11:50 / 일 휴관  (모르면 "확인 필요")',
     fee1: '예: 3,000원', feeM: '예: 50,000원',
+    shallow: '예: 1.0m (1~3번 레인). 발이 닿는지가 제일 중요해요',
+    quiet: '예: 평일 14:00-16:00 (가 보고 사람 적었던 시간)',
   };
   render(`${topBar(isNew ? '수영장 추가' : '수영장 고치기')}
     <h1>${isNew ? '수영장 추가' : esc(p.name)}</h1>
@@ -746,7 +828,7 @@ function viewPoolEdit(idx) {
 function viewLog() {
   const C = curriculum(), Ls = logs(), M = mainNext(C, Ls);
   const total = C.main.length, pos = Math.min(M.idx, total);
-  const cur = M.finished ? '모든 수업 완료' : `${M.lesson.id}. ${M.lesson.title}`;
+  const cur = M.finished ? '모든 수업 완료' : lessonLabel(M.lesson);
   const went = new Set(Ls.map(l => l.date));
   const today = new Date();
   const base = S.calMonth || new Date(today.getFullYear(), today.getMonth(), 1);

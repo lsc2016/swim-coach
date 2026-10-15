@@ -218,3 +218,16 @@ label.f { display: block; font-size: 0.8em; font-weight: 700; color: var(--muted
 .status { font-size: 0.75em; color: var(--muted); text-align: center; margin-top: 8px; }
 .exportline { font-size: 0.72em; color: var(--muted); text-align: right; margin: 0 0 4px; }
 .exportline b { color: var(--warn); }
+.stopbox {
+  margin-top: 18px;
+  border: 3px solid var(--good);
+  background: var(--good-bg);
+  color: var(--text);
+  border-radius: 16px;
+  padding: 14px 16px;
+  font-size: 0.95em;
+}
+.stopbox b { color: var(--good); }
+.pool .key { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 0.95em; background: var(--accent); border-radius: 12px; padding: 8px 12px; }
+.pool .key dt { color: var(--muted); font-weight: 700; }
+.pool .key dd { margin: 0; font-weight: 700; }
